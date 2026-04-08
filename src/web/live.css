@@ -1,0 +1,391 @@
+:root {
+  color-scheme: dark;
+  --bg: #05070d;
+  --panel: rgba(10, 14, 24, 0.8);
+  --ink: #f5f7fb;
+  --muted: #98a2b7;
+  --line: rgba(255, 255, 255, 0.1);
+  --electric: #7ca7ff;
+  --cyan: #5fd8ff;
+  --warm: #ffb86b;
+  --danger: #ff8a7a;
+  --shadow: 0 30px 90px rgba(0, 0, 0, 0.45);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 20% 0%, rgba(124, 167, 255, 0.22), transparent 28%),
+    radial-gradient(circle at 90% 10%, rgba(95, 216, 255, 0.16), transparent 22%),
+    linear-gradient(180deg, #02040a 0%, var(--bg) 100%);
+}
+
+body,
+button,
+input,
+textarea,
+a {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.shell {
+  width: min(1320px, calc(100% - 28px));
+  margin: 0 auto;
+  padding: 20px 0 56px;
+}
+
+.top-nav,
+.hero,
+.studio-panel,
+.metric-card,
+.card,
+.feed-item,
+.alert,
+.info-banner {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+  border-radius: 26px;
+}
+
+.top-nav {
+  display: inline-flex;
+  gap: 10px;
+  padding: 8px;
+  margin-bottom: 14px;
+  opacity: 0.84;
+}
+
+.top-nav a {
+  padding: 9px 13px;
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.top-nav a.nav-link-active {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.hero {
+  padding: 28px;
+  margin-bottom: 18px;
+}
+
+.live-minimal {
+  display: block;
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  color: #d7e0f2;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.hero h1,
+.section-heading h2,
+.side-note h2 {
+  margin-top: 0;
+}
+
+.hero h1 {
+  font-size: clamp(1.9rem, 4vw, 3rem);
+  line-height: 1;
+  margin-bottom: 14px;
+  max-width: 13ch;
+}
+
+.lede,
+.microcopy,
+.side-note p,
+.metric-card span,
+.metric-card small {
+  color: var(--muted);
+}
+
+.hero-actions,
+.chip-row,
+.card-topline,
+.feed-actions,
+.format-action-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.hero-actions {
+  margin-top: 22px;
+}
+
+button,
+.secondary-link,
+.card a,
+.feed-item a,
+.feed-item button {
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+button,
+.secondary-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 13px 18px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+}
+
+.feed-item button {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+}
+
+button {
+  background: linear-gradient(90deg, rgba(255,255,255,0.96), rgba(219,230,255,0.92));
+  color: #05070d;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.secondary-link {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.control-shell,
+.metrics-grid,
+.content-grid,
+.feed-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.control-panel,
+.side-note,
+.panel {
+  padding: 22px;
+}
+
+.live-filter-panel {
+  margin-bottom: 18px;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(220px, 0.8fr);
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.filter-grid label {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 0;
+}
+
+.filter-grid label span {
+  color: #d7e0f2;
+  font-size: 0.84rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+}
+
+input,
+textarea {
+  width: 100%;
+  padding: 13px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+}
+
+textarea {
+  resize: vertical;
+}
+
+.metrics-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.metric-card {
+  padding: 18px;
+}
+
+.metric-card strong {
+  display: block;
+  margin: 8px 0;
+  font-size: clamp(1.4rem, 2vw, 2rem);
+}
+
+.chip,
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.chip {
+  background: rgba(255, 255, 255, 0.06);
+  color: #dbe5f5;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.badge-hot {
+  background: rgba(255, 138, 122, 0.14);
+  color: var(--danger);
+}
+
+.badge-warm {
+  background: rgba(255, 184, 107, 0.18);
+  color: var(--warm);
+}
+
+.badge-cool {
+  background: rgba(124, 167, 255, 0.12);
+  color: var(--electric);
+}
+
+.panel {
+  margin-bottom: 18px;
+}
+
+.content-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.feed-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.card,
+.feed-item {
+  padding: 20px;
+}
+
+.card a,
+.feed-item a {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+}
+
+.feed-actions {
+  margin-top: 12px;
+}
+
+.format-action-grid {
+  margin-top: 10px;
+}
+
+.format-action-grid button {
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+}
+
+.subtle-banner {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.alert,
+.info-banner,
+.empty-state {
+  border-radius: 20px;
+}
+
+.alert,
+.info-banner {
+  padding: 15px 16px;
+  margin-bottom: 18px;
+}
+
+.info-banner {
+  color: #dbe5f5;
+  background: rgba(124, 167, 255, 0.12);
+}
+
+.alert {
+  color: #ffd3c7;
+  background: rgba(109, 30, 18, 0.34);
+}
+
+.empty-state {
+  margin: 0;
+  padding: 18px;
+  border: 1px dashed var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+}
+
+button:hover,
+.secondary-link:hover,
+.card a:hover,
+.feed-item a:hover {
+  transform: translateY(-2px);
+}
+
+@media (max-width: 1180px) {
+  .metrics-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .content-grid,
+  .feed-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1024px) {
+  .hero,
+  .filter-grid,
+  .metrics-grid,
+  .content-grid,
+  .feed-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .shell {
+    width: min(100% - 18px, 1320px);
+  }
+
+  .top-nav {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .hero-actions {
+    display: grid;
+  }
+}

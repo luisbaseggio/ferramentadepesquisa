@@ -1,0 +1,26 @@
+{
+  "name": "niche-research-cli",
+  "version": "1.0.0",
+  "description": "CLI para automatizar pesquisas em nichos e gerar insumos para conteudo",
+  "type": "module",
+  "bin": {
+    "niche-research": "./src/main.js"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "research": "node src/main.js",
+    "radar:web": "node src/web/server.js",
+    "agents:activate": "node src/activate-squads.js",
+    "share:web": "lt --port 4173 --local-host 127.0.0.1",
+    "share:lan": "node src/web/share-lan.js",
+    "test:python": "python3 -m unittest discover -s tests -t . -p 'test_*.py'",
+    "test:js": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "googleapis": "^171.4.0",
+    "localtunnel": "^2.0.2"
+  }
+}
