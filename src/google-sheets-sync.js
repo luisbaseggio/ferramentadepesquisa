@@ -113,6 +113,21 @@ async function createSheetsClient(serviceAccountPath) {
   });
 }
 
+async function createSheetsClientFromJson(serviceAccountJson) {
+  const credentials = JSON.parse(serviceAccountJson);
+
+  const auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: SHEETS_SCOPE
+  });
+
+  const authClient = await auth.getClient();
+  return google.sheets({
+    version: "v4",
+    auth: authClient
+  });
+}
+
 async function ensureHeaderRow(sheets, spreadsheetId, sheetName) {
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -141,8 +156,23 @@ function filterSyncableItems(items) {
 export function createGoogleSheetsReviewSync({
   spreadsheetId,
   sheetName,
-  serviceAccountPath
+  serviceAccountPath,
+  serviceAccountJson = ""
 }) {
+  const configured = Boolean(serviceAccountJson || serviceAccountPath);
+
+  async function getSheetsClient() {
+    if (serviceAccountJson) {
+      return createSheetsClientFromJson(serviceAccountJson);
+    }
+
+    if (serviceAccountPath) {
+      return createSheetsClient(serviceAccountPath);
+    }
+
+    throw new Error("Google Sheets nao configurado para este ambiente.");
+  }
+
   async function listRows(sheets) {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
@@ -164,8 +194,11 @@ export function createGoogleSheetsReviewSync({
   }
 
   return {
+    isConfigured() {
+      return configured;
+    },
     async syncQueue(queue) {
-      const sheets = await createSheetsClient(serviceAccountPath);
+      const sheets = await getSheetsClient();
       const sheetProperties = await getSheetMetadata(sheets);
       const sheetId = sheetProperties.sheetId;
       await ensureHeaderRow(sheets, spreadsheetId, sheetName);
@@ -241,7 +274,7 @@ export function createGoogleSheetsReviewSync({
       };
     },
     async healthcheck() {
-      const sheets = await createSheetsClient(serviceAccountPath);
+      const sheets = await getSheetsClient();
       await getSheetMetadata(sheets);
 
       return {
@@ -251,7 +284,7 @@ export function createGoogleSheetsReviewSync({
       };
     },
     async fetchReviews() {
-      const sheets = await createSheetsClient(serviceAccountPath);
+      const sheets = await getSheetsClient();
       await ensureHeaderRow(sheets, spreadsheetId, sheetName);
       const values = await listRows(sheets);
 
@@ -262,7 +295,7 @@ export function createGoogleSheetsReviewSync({
       };
     },
     async clearSheet() {
-      const sheets = await createSheetsClient(serviceAccountPath);
+      const sheets = await getSheetsClient();
       await ensureHeaderRow(sheets, spreadsheetId, sheetName);
       await sheets.spreadsheets.values.clear({
         spreadsheetId,

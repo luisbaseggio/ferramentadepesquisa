@@ -36,7 +36,9 @@ let uiState = {
 };
 
 let eventSource = null;
+let streamPollTimer = null;
 let requestSequence = 0;
+const RADAR_POLL_INTERVAL_MS = 60000;
 
 function normalizeText(value) {
   return String(value ?? "")
@@ -829,6 +831,37 @@ function closeStream() {
     eventSource.close();
     eventSource = null;
   }
+
+  if (streamPollTimer) {
+    window.clearInterval(streamPollTimer);
+    streamPollTimer = null;
+  }
+}
+
+function startPollingFallback() {
+  if (streamPollTimer) {
+    return;
+  }
+
+  uiState.streamStatus = "polling";
+  render();
+
+  streamPollTimer = window.setInterval(async () => {
+    try {
+      await loadSnapshot(false);
+      uiState.streamStatus = "polling";
+
+      if (!uiState.busyAction) {
+        uiState.activityMessage = `Radar atualizado automaticamente para ${uiState.profile.niche}.`;
+      }
+
+      render();
+    } catch (error) {
+      uiState.streamStatus = "reconectando";
+      uiState.error = error.message;
+      render();
+    }
+  }, RADAR_POLL_INTERVAL_MS);
 }
 
 function connectStream() {
@@ -869,8 +902,8 @@ function connectStream() {
   });
 
   eventSource.onerror = () => {
-    uiState.streamStatus = "reconectando";
-    render();
+    closeStream();
+    startPollingFallback();
   };
 
   eventSource.onopen = () => {

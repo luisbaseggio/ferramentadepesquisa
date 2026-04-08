@@ -12,13 +12,12 @@ import { createOpenAIContentGenerator } from "../openai-content-generator.js";
 import { createApprovedPromptRewriter } from "../openai-approved-rewriter.js";
 import { createRealtimeRadarService } from "../realtime-radar.js";
 import { createReviewQueueRepository } from "../review-queue.js";
+import { APPROVED_FILES_DIR, IS_SERVERLESS_RUNTIME, resolveDataPath, resolveOutputPath } from "../runtime-paths.js";
 import { createWorkspaceAuthService } from "../workspace-auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 const WEB_DIR = __dirname;
 const PORT = Number(process.env.PORT || 4173);
-const APPROVED_FILES_DIR = path.resolve(PROJECT_ROOT, "output", "approved-posts");
 const SESSION_COOKIE_NAME = "studio_session";
 const PROTECTED_PAGE_PATHS = new Set([
   "/live",
@@ -43,20 +42,20 @@ const MIME_TYPES = {
 
 const radarService = createRealtimeRadarService();
 const reviewQueue = createReviewQueueRepository({
-  outputFile: path.resolve(PROJECT_ROOT, "output", "review-queue.json")
+  outputFile: resolveOutputPath("review-queue.json")
 });
 const approvedChannel = createApprovedChannelRepository({
-  outputFile: path.resolve(PROJECT_ROOT, "output", "approved-channel.json"),
-  markdownDir: path.resolve(PROJECT_ROOT, "output", "approved-posts")
+  outputFile: resolveOutputPath("approved-channel.json"),
+  markdownDir: resolveOutputPath("approved-posts")
 });
 const googleSheetsSync = createGoogleSheetsReviewSync(GOOGLE_SHEETS_CONFIG);
 const authService = createWorkspaceAuthService({
-  stateFile: path.resolve(PROJECT_ROOT, "data", "auth-state.json")
+  stateFile: resolveDataPath("auth-state.json")
 });
 const approvedPromptRewriter = createApprovedPromptRewriter();
 const openAIContentGenerator = createOpenAIContentGenerator();
 const syncStatus = {
-  configured: true,
+  configured: googleSheetsSync.isConfigured(),
   spreadsheetId: GOOGLE_SHEETS_CONFIG.spreadsheetId,
   sheetName: GOOGLE_SHEETS_CONFIG.sheetName,
   spreadsheetUrl: GOOGLE_SHEETS_CONFIG.spreadsheetUrl,
@@ -321,6 +320,13 @@ function buildRadarProfile(searchParams) {
 }
 
 function handleSse(request, response, url) {
+  if (IS_SERVERLESS_RUNTIME) {
+    sendJson(response, 501, {
+      error: "O stream ao vivo nao esta disponivel no deploy serverless. Use o polling automatico da interface."
+    });
+    return;
+  }
+
   const profile = buildRadarProfile(url.searchParams);
 
   response.writeHead(200, {
@@ -342,7 +348,7 @@ function handleSse(request, response, url) {
   });
 }
 
-const server = createServer(async (request, response) => {
+export async function handleRequest(request, response) {
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
   const sessionToken = getSessionTokenFromRequest(request);
 
@@ -779,11 +785,19 @@ const server = createServer(async (request, response) => {
       error: error.message || "Erro interno no servidor"
     });
   }
-});
+}
 
-server.listen(PORT, () => {
-  console.log(`Home local em http://localhost:${PORT}`);
-  console.log(`Monitor ao vivo em http://localhost:${PORT}/live`);
-  console.log(`Radar em tempo real em http://localhost:${PORT}/radar`);
-  console.log(`Canal de aprovados em http://localhost:${PORT}/approved`);
-});
+export default handleRequest;
+
+const isExecutedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isExecutedDirectly) {
+  const server = createServer(handleRequest);
+
+  server.listen(PORT, () => {
+    console.log(`Home local em http://localhost:${PORT}`);
+    console.log(`Monitor ao vivo em http://localhost:${PORT}/live`);
+    console.log(`Radar em tempo real em http://localhost:${PORT}/radar`);
+    console.log(`Canal de aprovados em http://localhost:${PORT}/approved`);
+  });
+}
