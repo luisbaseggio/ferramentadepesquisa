@@ -14,6 +14,9 @@ import { createRealtimeRadarService } from "../realtime-radar.js";
 import { createReviewQueueRepository } from "../review-queue.js";
 import { APPROVED_FILES_DIR, IS_SERVERLESS_RUNTIME, resolveDataPath, resolveOutputPath } from "../runtime-paths.js";
 import { SUPABASE_CONFIG, isSupabaseConfigured } from "../supabase-config.js";
+import { createSupabaseApprovedChannelRepository } from "../supabase-approved-channel-repository.js";
+import { createSupabaseReviewQueueRepository } from "../supabase-review-queue-repository.js";
+import { createSupabaseServiceClient } from "../supabase-relational.js";
 import { createSupabaseStateStore } from "../supabase-state-store.js";
 import { createSupabaseWorkspaceAuthService } from "../supabase-workspace-auth.js";
 import { createWorkspaceAuthService } from "../workspace-auth.js";
@@ -44,30 +47,42 @@ const MIME_TYPES = {
 };
 
 const supabaseStateStore = createSupabaseStateStore();
+const supabaseServiceClient = createSupabaseServiceClient();
 const useSupabaseState = isSupabaseConfigured(SUPABASE_CONFIG);
 
 const radarService = createRealtimeRadarService();
-const reviewQueue = createReviewQueueRepository({
+const legacyReviewQueue = createReviewQueueRepository({
   outputFile: resolveOutputPath("review-queue.json"),
   store: useSupabaseState ? supabaseStateStore : null
 });
-const approvedChannel = createApprovedChannelRepository({
+const legacyApprovedChannel = createApprovedChannelRepository({
   outputFile: resolveOutputPath("approved-channel.json"),
   markdownDir: resolveOutputPath("approved-posts"),
   store: useSupabaseState ? supabaseStateStore : null
 });
 const googleSheetsSync = createGoogleSheetsReviewSync(GOOGLE_SHEETS_CONFIG);
-const authService = (useSupabaseState && SUPABASE_CONFIG.anonKey)
+const legacyAuthService = createWorkspaceAuthService({
+  stateFile: resolveDataPath("auth-state.json"),
+  store: useSupabaseState ? supabaseStateStore : null
+});
+const relationalReviewQueue = useSupabaseState && supabaseServiceClient
+  ? createSupabaseReviewQueueRepository({
+      client: supabaseServiceClient
+    })
+  : null;
+const relationalApprovedChannel = useSupabaseState && supabaseServiceClient
+  ? createSupabaseApprovedChannelRepository({
+      client: supabaseServiceClient
+    })
+  : null;
+const relationalAuthService = (useSupabaseState && SUPABASE_CONFIG.anonKey)
   ? createSupabaseWorkspaceAuthService({
       url: SUPABASE_CONFIG.url,
       anonKey: SUPABASE_CONFIG.anonKey,
       serviceRoleKey: SUPABASE_CONFIG.serviceRoleKey,
       store: supabaseStateStore
     })
-  : createWorkspaceAuthService({
-      stateFile: resolveDataPath("auth-state.json"),
-      store: useSupabaseState ? supabaseStateStore : null
-    });
+  : null;
 const approvedPromptRewriter = createApprovedPromptRewriter();
 const openAIContentGenerator = createOpenAIContentGenerator();
 const syncStatus = {
@@ -79,6 +94,165 @@ const syncStatus = {
   lastImportAt: null,
   lastError: null
 };
+
+function isRelationalBootstrapError(error) {
+  return String(error?.message || "").includes("tabelas relacionais do Supabase");
+}
+
+async function runWithFallback(primaryTask, fallbackTask) {
+  try {
+    return await primaryTask();
+  } catch (error) {
+    if (isRelationalBootstrapError(error)) {
+      return fallbackTask();
+    }
+
+    throw error;
+  }
+}
+
+const reviewQueue = {
+  list(workspaceId) {
+    if (!relationalReviewQueue || !workspaceId) {
+      return legacyReviewQueue.list();
+    }
+
+    return runWithFallback(
+      () => relationalReviewQueue.list(workspaceId),
+      () => legacyReviewQueue.list()
+    );
+  },
+  clear(workspaceId) {
+    if (!relationalReviewQueue || !workspaceId) {
+      return legacyReviewQueue.clear();
+    }
+
+    return runWithFallback(
+      () => relationalReviewQueue.clear(workspaceId),
+      () => legacyReviewQueue.clear()
+    );
+  },
+  upsertBatch(batch, workspaceId) {
+    if (!relationalReviewQueue || !workspaceId) {
+      return legacyReviewQueue.upsertBatch(batch);
+    }
+
+    return runWithFallback(
+      () => relationalReviewQueue.upsertBatch(batch, workspaceId),
+      () => legacyReviewQueue.upsertBatch(batch)
+    );
+  },
+  decide(id, decision, notes, workspaceId) {
+    if (!relationalReviewQueue || !workspaceId) {
+      return legacyReviewQueue.decide(id, decision, notes);
+    }
+
+    return runWithFallback(
+      () => relationalReviewQueue.decide(id, decision, notes, workspaceId),
+      () => legacyReviewQueue.decide(id, decision, notes)
+    );
+  },
+  mergeExternalReviews(reviews, workspaceId) {
+    if (!relationalReviewQueue || !workspaceId) {
+      return legacyReviewQueue.mergeExternalReviews(reviews);
+    }
+
+    return runWithFallback(
+      () => relationalReviewQueue.mergeExternalReviews(reviews, workspaceId),
+      () => legacyReviewQueue.mergeExternalReviews(reviews)
+    );
+  }
+};
+
+const approvedChannel = {
+  list(workspaceId) {
+    if (!relationalApprovedChannel || !workspaceId) {
+      return legacyApprovedChannel.list();
+    }
+
+    return runWithFallback(
+      () => relationalApprovedChannel.list(workspaceId),
+      () => legacyApprovedChannel.list()
+    );
+  },
+  clear(workspaceId) {
+    if (!relationalApprovedChannel || !workspaceId) {
+      return legacyApprovedChannel.clear();
+    }
+
+    return runWithFallback(
+      () => relationalApprovedChannel.clear(workspaceId),
+      () => legacyApprovedChannel.clear()
+    );
+  },
+  syncFromReviewQueue(queue, workspaceId) {
+    if (!relationalApprovedChannel || !workspaceId) {
+      return legacyApprovedChannel.syncFromReviewQueue(queue);
+    }
+
+    return runWithFallback(
+      () => relationalApprovedChannel.syncFromReviewQueue(queue, workspaceId),
+      () => legacyApprovedChannel.syncFromReviewQueue(queue)
+    );
+  },
+  updatePacket(id, updates, workspaceId) {
+    if (!relationalApprovedChannel || !workspaceId) {
+      return legacyApprovedChannel.updatePacket(id, updates);
+    }
+
+    return runWithFallback(
+      () => relationalApprovedChannel.updatePacket(id, updates, workspaceId),
+      () => legacyApprovedChannel.updatePacket(id, updates)
+    );
+  }
+};
+
+const authService = relationalAuthService
+  ? {
+      getSession(sessionToken) {
+        return runWithFallback(
+          () => relationalAuthService.getSession(sessionToken),
+          () => legacyAuthService.getSession(sessionToken)
+        );
+      },
+      signup(body) {
+        return runWithFallback(
+          () => relationalAuthService.signup(body),
+          () => legacyAuthService.signup(body)
+        );
+      },
+      login(body) {
+        return runWithFallback(
+          () => relationalAuthService.login(body),
+          () => legacyAuthService.login(body)
+        );
+      },
+      logout(sessionToken) {
+        return runWithFallback(
+          () => relationalAuthService.logout(sessionToken),
+          () => legacyAuthService.logout(sessionToken)
+        );
+      },
+      listWorkspaces(sessionToken) {
+        return runWithFallback(
+          () => relationalAuthService.listWorkspaces(sessionToken),
+          () => legacyAuthService.listWorkspaces(sessionToken)
+        );
+      },
+      createWorkspace(sessionToken, body) {
+        return runWithFallback(
+          () => relationalAuthService.createWorkspace(sessionToken, body),
+          () => legacyAuthService.createWorkspace(sessionToken, body)
+        );
+      },
+      selectWorkspace(sessionToken, workspaceId) {
+        return runWithFallback(
+          () => relationalAuthService.selectWorkspace(sessionToken, workspaceId),
+          () => legacyAuthService.selectWorkspace(sessionToken, workspaceId)
+        );
+      }
+    }
+  : legacyAuthService;
 
 async function syncReviewQueueToSheets(queue) {
   try {
@@ -101,11 +275,11 @@ async function syncReviewQueueToSheets(queue) {
   }
 }
 
-async function importReviewQueueFromSheets() {
+async function importReviewQueueFromSheets(workspaceId = null) {
   try {
     const sheetReviews = await googleSheetsSync.fetchReviews();
-    const queue = await reviewQueue.mergeExternalReviews(sheetReviews.items);
-    const approved = await approvedChannel.syncFromReviewQueue(queue);
+    const queue = await reviewQueue.mergeExternalReviews(sheetReviews.items, workspaceId);
+    const approved = await approvedChannel.syncFromReviewQueue(queue, workspaceId);
     syncStatus.lastImportAt = new Date().toISOString();
     syncStatus.lastError = null;
     return {
@@ -117,8 +291,8 @@ async function importReviewQueueFromSheets() {
     };
   } catch (error) {
     syncStatus.lastError = error.message || "Falha ao importar revisoes do Google Sheets.";
-    const queue = await reviewQueue.list();
-    const approved = await approvedChannel.list();
+    const queue = await reviewQueue.list(workspaceId);
+    const approved = await approvedChannel.list(workspaceId);
     return {
       ok: false,
       importedItems: 0,
@@ -130,10 +304,10 @@ async function importReviewQueueFromSheets() {
   }
 }
 
-async function buildStudioOverview() {
+async function buildStudioOverview(workspaceId = null) {
   const [queue, approved] = await Promise.all([
-    reviewQueue.list(),
-    approvedChannel.list()
+    reviewQueue.list(workspaceId),
+    approvedChannel.list(workspaceId)
   ]);
 
   return {
@@ -141,16 +315,16 @@ async function buildStudioOverview() {
     approvedChannel: approved,
     sheetsStatus: syncStatus,
     storage: {
-      mode: useSupabaseState ? "supabase" : "local",
+      mode: useSupabaseState ? "supabase-relational" : "local",
       authMode: (useSupabaseState && SUPABASE_CONFIG.anonKey) ? "supabase-auth" : "local-auth"
     }
   };
 }
 
-async function resetOperation(mode = "local") {
+async function resetOperation(mode = "local", workspaceId = null) {
   radarService.clear();
-  const queue = await reviewQueue.clear();
-  const approved = await approvedChannel.clear();
+  const queue = await reviewQueue.clear(workspaceId);
+  const approved = await approvedChannel.clear(workspaceId);
 
   syncStatus.lastSuccessAt = null;
   syncStatus.lastImportAt = null;
@@ -374,6 +548,7 @@ export async function handleRequest(request, response) {
 
   try {
     const sessionContext = await authService.getSession(sessionToken);
+    const activeWorkspaceId = sessionContext?.activeWorkspace?.id || null;
 
     if (request.method === "GET" && PROTECTED_PAGE_PATHS.has(url.pathname) && !sessionContext) {
       sendRedirect(response, "/?auth=required");
@@ -544,9 +719,9 @@ export async function handleRequest(request, response) {
             ...batch,
             fallbackUsed: false
           };
-      const queue = await reviewQueue.upsertBatch(effectiveBatch);
+      const queue = await reviewQueue.upsertBatch(effectiveBatch, activeWorkspaceId);
       const sheets = await syncReviewQueueToSheets(queue);
-      const approved = await approvedChannel.syncFromReviewQueue(queue);
+      const approved = await approvedChannel.syncFromReviewQueue(queue, activeWorkspaceId);
 
       sendJson(response, 200, {
         ok: true,
@@ -590,9 +765,9 @@ export async function handleRequest(request, response) {
       const queue = await reviewQueue.upsertBatch({
         generatedAt: createdAt,
         drafts: [draft]
-      });
+      }, activeWorkspaceId);
       const sheets = await syncReviewQueueToSheets(queue);
-      const approved = await approvedChannel.syncFromReviewQueue(queue);
+      const approved = await approvedChannel.syncFromReviewQueue(queue, activeWorkspaceId);
 
       sendJson(response, 200, {
         ok: true,
@@ -609,19 +784,19 @@ export async function handleRequest(request, response) {
     }
 
     if (request.method === "GET" && url.pathname === "/api/review-queue") {
-      sendJson(response, 200, await reviewQueue.list());
+      sendJson(response, 200, await reviewQueue.list(activeWorkspaceId));
       return;
     }
 
     if (request.method === "GET" && url.pathname === "/api/studio/overview") {
-      sendJson(response, 200, await buildStudioOverview());
+      sendJson(response, 200, await buildStudioOverview(activeWorkspaceId));
       return;
     }
 
     if (request.method === "GET" && url.pathname === "/api/google-sheets/status") {
       sendJson(response, 200, {
         ...syncStatus,
-        storageMode: useSupabaseState ? "supabase" : "local",
+        storageMode: useSupabaseState ? "supabase-relational" : "local",
         authMode: (useSupabaseState && SUPABASE_CONFIG.anonKey) ? "supabase-auth" : "local-auth"
       });
       return;
@@ -630,7 +805,7 @@ export async function handleRequest(request, response) {
     if (request.method === "POST" && url.pathname === "/api/system/reset") {
       const body = await parseJsonBody(request);
       const mode = body.mode === "all" ? "all" : "local";
-      const result = await resetOperation(mode);
+      const result = await resetOperation(mode, activeWorkspaceId);
       sendJson(response, 200, result);
       return;
     }
@@ -662,7 +837,7 @@ export async function handleRequest(request, response) {
     }
 
     if (request.method === "GET" && url.pathname === "/api/approved-channel") {
-      sendJson(response, 200, await approvedChannel.list());
+      sendJson(response, 200, await approvedChannel.list(activeWorkspaceId));
       return;
     }
 
@@ -671,7 +846,7 @@ export async function handleRequest(request, response) {
     if (request.method === "POST" && approvedPromptMatch) {
       const body = await parseJsonBody(request);
       const packetId = decodeURIComponent(approvedPromptMatch[1]);
-      const approved = await approvedChannel.list();
+      const approved = await approvedChannel.list(activeWorkspaceId);
       const packet = approved.items.find((item) => item.id === packetId);
 
       if (!packet) {
@@ -691,7 +866,7 @@ export async function handleRequest(request, response) {
         aiPrompt: String(body.aiPrompt ?? ""),
         manualFinalRender: result.rewrittenText,
         newsContext: String(body.newsContext ?? "")
-      });
+      }, activeWorkspaceId);
 
       sendJson(response, 200, {
         ok: true,
@@ -718,7 +893,7 @@ export async function handleRequest(request, response) {
         evaluationStatus: body.evaluationStatus,
         evaluationScore: body.evaluationScore,
         evaluationNotes: body.evaluationNotes
-      });
+      }, activeWorkspaceId);
       sendJson(response, 200, {
         ok: true,
         message: "Pacote aprovado atualizado.",
@@ -728,7 +903,7 @@ export async function handleRequest(request, response) {
     }
 
     if (request.method === "POST" && url.pathname === "/api/google-sheets/sync") {
-      const queue = await reviewQueue.list();
+      const queue = await reviewQueue.list(activeWorkspaceId);
       const sheets = await syncReviewQueueToSheets(queue);
       sendJson(response, 200, {
         ok: sheets.ok,
@@ -743,7 +918,7 @@ export async function handleRequest(request, response) {
     }
 
     if (request.method === "POST" && url.pathname === "/api/google-sheets/import-review") {
-      const { queue, importedItems, ok, error } = await importReviewQueueFromSheets();
+      const { queue, importedItems, ok, error } = await importReviewQueueFromSheets(activeWorkspaceId);
       sendJson(response, 200, {
         ok,
         message: ok
@@ -761,9 +936,9 @@ export async function handleRequest(request, response) {
       const body = await parseJsonBody(request);
       const itemId = decodeURIComponent(reviewDecisionMatch[1]);
       const decision = ["approved", "rejected", "pending"].includes(body.decision) ? body.decision : "pending";
-      const queue = await reviewQueue.decide(itemId, decision, String(body.notes ?? ""));
+      const queue = await reviewQueue.decide(itemId, decision, String(body.notes ?? ""), activeWorkspaceId);
       const sheets = await syncReviewQueueToSheets(queue);
-      const approved = await approvedChannel.syncFromReviewQueue(queue);
+      const approved = await approvedChannel.syncFromReviewQueue(queue, activeWorkspaceId);
       sendJson(response, 200, {
         ok: true,
         message: sheets.ok
@@ -789,7 +964,7 @@ export async function handleRequest(request, response) {
           throw error;
         }
 
-        const approved = await approvedChannel.list();
+        const approved = await approvedChannel.list(activeWorkspaceId);
         const item = approved.items.find((entry) => entry.outputFileName === fileName);
 
         if (!item) {

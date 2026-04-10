@@ -1,10 +1,14 @@
 import { randomBytes, randomUUID, createHash, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
-import { createClient } from "@supabase/supabase-js";
+import { createSupabasePublicClient, createSupabaseServiceClient, isMissingTableError } from "./supabase-relational.js";
 
 const scrypt = promisify(scryptCallback);
 const SESSION_TTL_DAYS = 30;
+const PROFILES_TABLE = "profiles";
+const WORKSPACES_TABLE = "workspaces";
+const MEMBERSHIPS_TABLE = "workspace_memberships";
+const SESSIONS_TABLE = "workspace_sessions";
 
 function normalizeEmail(value) {
   return String(value ?? "").trim().toLowerCase();
@@ -18,19 +22,6 @@ function slugify(value) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48) || "workspace";
-}
-
-function ensureWorkspaceSlug(name, workspaces) {
-  const baseSlug = slugify(name);
-  let slug = baseSlug;
-  let counter = 2;
-
-  while (workspaces.some((workspace) => workspace.slug === slug)) {
-    slug = `${baseSlug}-${counter}`;
-    counter += 1;
-  }
-
-  return slug;
 }
 
 function hashSessionToken(token) {
@@ -69,7 +60,7 @@ function sanitizeWorkspace(workspace, role = "member") {
   };
 }
 
-function buildInitialState() {
+function buildInitialLegacyState() {
   return {
     updatedAt: null,
     users: [],
@@ -83,197 +74,354 @@ export function createSupabaseWorkspaceAuthService({
   url,
   anonKey,
   serviceRoleKey,
-  store,
+  store = null,
   stateKey = "auth_state",
   now = () => new Date().toISOString()
 }) {
-  if (!url || !anonKey || !serviceRoleKey || !store) {
-    throw new Error("Supabase Auth precisa de url, anon key, service role key e store.");
+  const publicClient = createSupabasePublicClient({ url, anonKey });
+  const adminClient = createSupabaseServiceClient({ url, serviceRoleKey });
+
+  if (!publicClient || !adminClient) {
+    throw new Error("Supabase Auth precisa de url, anon key e service role key.");
   }
 
-  const publicClient = createClient(url, anonKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false
+  async function readLegacyState() {
+    if (!store) {
+      return buildInitialLegacyState();
     }
-  });
-  const adminClient = createClient(url, serviceRoleKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false
-    }
-  });
 
-  async function readState() {
-    const state = await store.read(stateKey, buildInitialState());
+    try {
+      const state = await store.read(stateKey, buildInitialLegacyState());
+      return {
+        updatedAt: state.updatedAt ?? null,
+        users: Array.isArray(state.users) ? state.users : [],
+        workspaces: Array.isArray(state.workspaces) ? state.workspaces : [],
+        memberships: Array.isArray(state.memberships) ? state.memberships : [],
+        sessions: Array.isArray(state.sessions) ? state.sessions : []
+      };
+    } catch {
+      return buildInitialLegacyState();
+    }
+  }
+
+  async function writeLegacyState(state) {
+    if (!store) {
+      return state;
+    }
+
+    try {
+      return await store.write(stateKey, {
+        ...state,
+        updatedAt: now()
+      });
+    } catch {
+      return state;
+    }
+  }
+
+  async function listAllUsersByEmail() {
+    const users = [];
+    let page = 1;
+
+    while (true) {
+      const { data, error } = await adminClient.auth.admin.listUsers({
+        page,
+        perPage: 1000
+      });
+
+      if (error) {
+        throw new Error(error.message || "Nao foi possivel listar usuarios do Supabase Auth.");
+      }
+
+      const chunk = data?.users || [];
+      users.push(...chunk);
+
+      if (chunk.length < 1000) {
+        break;
+      }
+
+      page += 1;
+    }
+
+    return users;
+  }
+
+  async function ensureUniqueWorkspaceSlug(name) {
+    const baseSlug = slugify(name);
+    const { data, error } = await adminClient
+      .from(WORKSPACES_TABLE)
+      .select("slug");
+
+    if (error) {
+      if (isMissingTableError(error)) {
+        throw new Error("As tabelas relacionais do Supabase ainda nao foram criadas.");
+      }
+
+      throw new Error(`Supabase workspaces read failed: ${error.message}`);
+    }
+
+    const existingSlugs = new Set((data || []).map((item) => item.slug));
+    let slug = baseSlug;
+    let counter = 2;
+
+    while (existingSlugs.has(slug)) {
+      slug = `${baseSlug}-${counter}`;
+      counter += 1;
+    }
+
+    return slug;
+  }
+
+  async function ensureProfile(supabaseUser, fallbackName = "") {
+    const normalizedEmail = normalizeEmail(supabaseUser.email);
+    const profile = {
+      id: supabaseUser.id,
+      name: String(supabaseUser.user_metadata?.name || fallbackName || normalizedEmail.split("@")[0] || "Usuário").trim(),
+      email: normalizedEmail,
+      created_at: now(),
+      last_login_at: now()
+    };
+
+    const { error } = await adminClient
+      .from(PROFILES_TABLE)
+      .upsert(profile, { onConflict: "id" });
+
+    if (error) {
+      if (isMissingTableError(error)) {
+        throw new Error("As tabelas relacionais do Supabase ainda nao foram criadas.");
+      }
+
+      throw new Error(`Supabase profile upsert failed: ${error.message}`);
+    }
+
     return {
-      updatedAt: state.updatedAt ?? null,
-      users: Array.isArray(state.users) ? state.users : [],
-      workspaces: Array.isArray(state.workspaces) ? state.workspaces : [],
-      memberships: Array.isArray(state.memberships) ? state.memberships : [],
-      sessions: Array.isArray(state.sessions) ? state.sessions : []
+      id: profile.id,
+      name: profile.name,
+      email: profile.email,
+      createdAt: profile.created_at,
+      lastLoginAt: profile.last_login_at
     };
   }
 
-  async function writeState(state) {
-    return store.write(stateKey, {
-      ...state,
-      updatedAt: now()
-    });
+  async function loadProfile(userId) {
+    const { data, error } = await adminClient
+      .from(PROFILES_TABLE)
+      .select("id, name, email, created_at, last_login_at")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (error) {
+      if (isMissingTableError(error)) {
+        throw new Error("As tabelas relacionais do Supabase ainda nao foram criadas.");
+      }
+
+      throw new Error(`Supabase profile read failed: ${error.message}`);
+    }
+
+    if (!data) {
+      return null;
+    }
+
+    return {
+      id: data.id,
+      name: data.name,
+      email: data.email,
+      createdAt: data.created_at,
+      lastLoginAt: data.last_login_at
+    };
   }
 
-  function listMembershipsForUser(state, userId) {
-    return state.memberships
-      .filter((membership) => membership.userId === userId)
+  async function listMembershipsForUser(userId) {
+    const { data: memberships, error: membershipError } = await adminClient
+      .from(MEMBERSHIPS_TABLE)
+      .select("workspace_id, role, created_at")
+      .eq("user_id", userId);
+
+    if (membershipError) {
+      if (isMissingTableError(membershipError)) {
+        throw new Error("As tabelas relacionais do Supabase ainda nao foram criadas.");
+      }
+
+      throw new Error(`Supabase memberships read failed: ${membershipError.message}`);
+    }
+
+    if (!memberships || memberships.length === 0) {
+      return [];
+    }
+
+    const workspaceIds = memberships.map((membership) => membership.workspace_id);
+    const { data: workspaces, error: workspaceError } = await adminClient
+      .from(WORKSPACES_TABLE)
+      .select("id, name, slug, created_at")
+      .in("id", workspaceIds);
+
+    if (workspaceError) {
+      throw new Error(`Supabase workspaces read failed: ${workspaceError.message}`);
+    }
+
+    const workspaceMap = new Map((workspaces || []).map((workspace) => [workspace.id, workspace]));
+
+    return memberships
       .map((membership) => {
-        const workspace = state.workspaces.find((entry) => entry.id === membership.workspaceId);
+        const workspace = workspaceMap.get(membership.workspace_id);
 
         if (!workspace) {
           return null;
         }
 
-        return sanitizeWorkspace(workspace, membership.role);
+        return sanitizeWorkspace({
+          id: workspace.id,
+          name: workspace.name,
+          slug: workspace.slug,
+          createdAt: workspace.created_at
+        }, membership.role);
       })
       .filter(Boolean)
       .sort((left, right) => left.name.localeCompare(right.name, "pt-BR"));
   }
 
-  async function createSession(state, userId, workspaceId, supabaseUserId) {
+  async function ensureDefaultWorkspace(userId, workspaceName = "") {
+    const memberships = await listMembershipsForUser(userId);
+
+    if (memberships.length > 0) {
+      return {
+        workspace: memberships[0],
+        membership: { role: memberships[0].role }
+      };
+    }
+
+    const trimmedName = String(workspaceName || "Meu Workspace").trim();
+    const workspace = {
+      id: `ws_${randomUUID()}`,
+      name: trimmedName,
+      slug: await ensureUniqueWorkspaceSlug(trimmedName),
+      owner_user_id: userId,
+      created_at: now()
+    };
+    const membership = {
+      id: `mbr_${randomUUID()}`,
+      user_id: userId,
+      workspace_id: workspace.id,
+      role: "owner",
+      created_at: now()
+    };
+
+    const { error: workspaceError } = await adminClient
+      .from(WORKSPACES_TABLE)
+      .insert(workspace);
+
+    if (workspaceError) {
+      throw new Error(`Supabase workspace create failed: ${workspaceError.message}`);
+    }
+
+    const { error: membershipError } = await adminClient
+      .from(MEMBERSHIPS_TABLE)
+      .insert(membership);
+
+    if (membershipError) {
+      throw new Error(`Supabase membership create failed: ${membershipError.message}`);
+    }
+
+    return {
+      workspace: sanitizeWorkspace({
+        id: workspace.id,
+        name: workspace.name,
+        slug: workspace.slug,
+        createdAt: workspace.created_at
+      }, "owner"),
+      membership: { role: "owner" }
+    };
+  }
+
+  async function createSessionRecord(userId, workspaceId) {
     const sessionToken = randomBytes(32).toString("base64url");
     const createdAt = now();
     const expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const session = {
       id: `sess_${randomUUID()}`,
-      tokenHash: hashSessionToken(sessionToken),
-      userId,
-      workspaceId,
-      supabaseUserId: supabaseUserId || null,
-      createdAt,
-      lastSeenAt: createdAt,
-      expiresAt
+      token_hash: hashSessionToken(sessionToken),
+      user_id: userId,
+      workspace_id: workspaceId,
+      created_at: createdAt,
+      last_seen_at: createdAt,
+      expires_at: expiresAt
     };
-    state.sessions.push(session);
 
-    return {
-      session,
-      sessionToken
-    };
-  }
+    const { error } = await adminClient
+      .from(SESSIONS_TABLE)
+      .insert(session);
 
-  async function cleanupExpiredSessions(state) {
-    const nextSessions = state.sessions.filter((session) => (
-      new Date(session.expiresAt).getTime() > Date.now()
-    ));
-
-    if (nextSessions.length === state.sessions.length) {
-      return state;
+    if (error) {
+      throw new Error(`Supabase session create failed: ${error.message}`);
     }
 
-    const nextState = {
-      ...state,
-      sessions: nextSessions
+    return {
+      sessionToken,
+      session
     };
-    await writeState(nextState);
-    return nextState;
   }
 
-  async function buildSessionPayload(state, session) {
-    const user = state.users.find((entry) => entry.id === session.userId);
+  async function buildSessionPayloadFromRecord(sessionRecord) {
+    const user = await loadProfile(sessionRecord.user_id);
 
     if (!user) {
       return null;
     }
 
-    const workspaces = listMembershipsForUser(state, user.id);
-    const activeWorkspace = workspaces.find((workspace) => workspace.id === session.workspaceId) || workspaces[0] || null;
+    const workspaces = await listMembershipsForUser(user.id);
+    const activeWorkspace = workspaces.find((workspace) => workspace.id === sessionRecord.workspace_id) || workspaces[0] || null;
 
     return {
       user: sanitizeUser(user),
       workspaces,
       activeWorkspace,
       session: {
-        id: session.id,
-        createdAt: session.createdAt,
-        expiresAt: session.expiresAt,
-        lastSeenAt: session.lastSeenAt
+        id: sessionRecord.id,
+        createdAt: sessionRecord.created_at,
+        expiresAt: sessionRecord.expires_at,
+        lastSeenAt: sessionRecord.last_seen_at
       }
     };
   }
 
-  async function ensureLocalUserForSupabaseUser(state, supabaseUser, fallbackName = "") {
-    const email = normalizeEmail(supabaseUser.email);
-    let user = state.users.find((entry) => entry.supabaseUserId === supabaseUser.id);
-
-    if (!user) {
-      user = state.users.find((entry) => entry.email === email);
+  async function findSessionByToken(sessionToken) {
+    if (!sessionToken) {
+      return null;
     }
 
-    if (!user) {
-      const createdAt = now();
-      user = {
-        id: `usr_${randomUUID()}`,
-        supabaseUserId: supabaseUser.id,
-        name: String(supabaseUser.user_metadata?.name || fallbackName || email.split("@")[0] || "Usuário").trim(),
-        email,
-        createdAt,
-        lastLoginAt: createdAt
-      };
-      state.users.push(user);
-    } else {
-      user.supabaseUserId = supabaseUser.id;
-      user.name = user.name || String(supabaseUser.user_metadata?.name || fallbackName || email.split("@")[0] || "Usuário").trim();
-      user.email = email;
-      user.lastLoginAt = now();
+    const tokenHash = hashSessionToken(sessionToken);
+    const { data, error } = await adminClient
+      .from(SESSIONS_TABLE)
+      .select("id, user_id, workspace_id, created_at, last_seen_at, expires_at")
+      .eq("token_hash", tokenHash)
+      .maybeSingle();
+
+    if (error) {
+      if (isMissingTableError(error)) {
+        throw new Error("As tabelas relacionais do Supabase ainda nao foram criadas.");
+      }
+
+      throw new Error(`Supabase session read failed: ${error.message}`);
     }
 
-    return user;
+    if (!data) {
+      return null;
+    }
+
+    if (new Date(data.expires_at).getTime() <= Date.now()) {
+      await adminClient.from(SESSIONS_TABLE).delete().eq("id", data.id);
+      return null;
+    }
+
+    return data;
   }
 
-  async function ensureDefaultWorkspace(state, user, workspaceName = "") {
-    const memberships = state.memberships.filter((entry) => entry.userId === user.id);
-    const existingWorkspace = memberships
-      .map((membership) => state.workspaces.find((entry) => entry.id === membership.workspaceId))
-      .find(Boolean);
-
-    if (existingWorkspace) {
-      const membership = memberships.find((entry) => entry.workspaceId === existingWorkspace.id);
-      return {
-        workspace: existingWorkspace,
-        membership
-      };
-    }
-
-    const createdAt = now();
-    const workspace = {
-      id: `ws_${randomUUID()}`,
-      name: String(workspaceName || "Meu Workspace").trim(),
-      slug: ensureWorkspaceSlug(String(workspaceName || "Meu Workspace").trim(), state.workspaces),
-      ownerUserId: user.id,
-      createdAt
-    };
-    const membership = {
-      id: `mbr_${randomUUID()}`,
-      userId: user.id,
-      workspaceId: workspace.id,
-      role: "owner",
-      createdAt
-    };
-
-    state.workspaces.push(workspace);
-    state.memberships.push(membership);
-
-    return {
-      workspace,
-      membership
-    };
-  }
-
-  async function upgradeLegacyUserIfPossible(state, normalizedEmail, password) {
-    const legacyUser = state.users.find((entry) => (
+  async function upgradeLegacyUserIfPossible(normalizedEmail, password) {
+    const legacyState = await readLegacyState();
+    const legacyUser = legacyState.users.find((entry) => (
       entry.email === normalizedEmail &&
       entry.passwordHash &&
-      entry.passwordSalt &&
-      !entry.supabaseUserId
+      entry.passwordSalt
     ));
 
     if (!legacyUser) {
@@ -302,41 +450,40 @@ export function createSupabaseWorkspaceAuthService({
     let supabaseUser = data?.user || null;
 
     if (!supabaseUser) {
-      const listed = await adminClient.auth.admin.listUsers({
-        page: 1,
-        perPage: 1000
-      });
-      supabaseUser = listed.data?.users?.find((entry) => normalizeEmail(entry.email) === normalizedEmail) || null;
+      const users = await listAllUsersByEmail();
+      supabaseUser = users.find((entry) => normalizeEmail(entry.email) === normalizedEmail) || null;
     }
 
     if (!supabaseUser) {
       throw new Error("Nao foi possivel localizar o usuario migrado no Supabase Auth.");
     }
 
-    legacyUser.supabaseUserId = supabaseUser.id;
-    legacyUser.lastLoginAt = now();
     delete legacyUser.passwordHash;
     delete legacyUser.passwordSalt;
-    await writeState(state);
+    legacyUser.supabaseUserId = supabaseUser.id;
+    legacyUser.lastLoginAt = now();
+    await writeLegacyState(legacyState);
 
     return supabaseUser;
   }
 
   return {
     async getSession(sessionToken) {
-      if (!sessionToken) {
-        return null;
-      }
-
-      const state = await cleanupExpiredSessions(await readState());
-      const tokenHash = hashSessionToken(sessionToken);
-      const session = state.sessions.find((entry) => entry.tokenHash === tokenHash);
+      const session = await findSessionByToken(sessionToken);
 
       if (!session) {
         return null;
       }
 
-      return buildSessionPayload(state, session);
+      await adminClient
+        .from(SESSIONS_TABLE)
+        .update({ last_seen_at: now() })
+        .eq("id", session.id);
+
+      return buildSessionPayloadFromRecord({
+        ...session,
+        last_seen_at: now()
+      });
     },
 
     async signup({ name, email, password, workspaceName }) {
@@ -373,12 +520,9 @@ export function createSupabaseWorkspaceAuthService({
         throw new Error(error.message || "Nao foi possivel criar a conta no Supabase Auth.");
       }
 
-      const supabaseUser = data.user;
-      const state = await readState();
-      const user = await ensureLocalUserForSupabaseUser(state, supabaseUser, trimmedName);
-      const { workspace, membership } = await ensureDefaultWorkspace(state, user, trimmedWorkspace);
-      const { sessionToken } = await createSession(state, user.id, workspace.id, supabaseUser.id);
-      await writeState(state);
+      const user = await ensureProfile(data.user, trimmedName);
+      const { workspace, membership } = await ensureDefaultWorkspace(user.id, trimmedWorkspace);
+      const { sessionToken } = await createSessionRecord(user.id, workspace.id);
 
       return {
         sessionToken,
@@ -398,8 +542,7 @@ export function createSupabaseWorkspaceAuthService({
       });
 
       if (signIn.error) {
-        const state = await readState();
-        const migratedUser = await upgradeLegacyUserIfPossible(state, normalizedEmail, password);
+        const migratedUser = await upgradeLegacyUserIfPossible(normalizedEmail, password);
 
         if (migratedUser) {
           signIn = await publicClient.auth.signInWithPassword({
@@ -413,19 +556,16 @@ export function createSupabaseWorkspaceAuthService({
         throw new Error("Email ou senha invalidos.");
       }
 
-      const supabaseUser = signIn.data.user;
-      const state = await readState();
-      const user = await ensureLocalUserForSupabaseUser(state, supabaseUser, supabaseUser.user_metadata?.name || "");
-      const { workspace } = await ensureDefaultWorkspace(state, user, "Meu Workspace");
-      const memberships = listMembershipsForUser(state, user.id);
+      const user = await ensureProfile(signIn.data.user, signIn.data.user.user_metadata?.name || "");
+      const { workspace } = await ensureDefaultWorkspace(user.id, "Meu Workspace");
+      const memberships = await listMembershipsForUser(user.id);
       const activeWorkspace = memberships.find((entry) => entry.id === workspace.id) || memberships[0] || null;
 
       if (!activeWorkspace) {
         throw new Error("Sua conta ainda nao possui workspace.");
       }
 
-      const { sessionToken } = await createSession(state, user.id, activeWorkspace.id, supabaseUser.id);
-      await writeState(state);
+      const { sessionToken } = await createSessionRecord(user.id, activeWorkspace.id);
 
       return {
         sessionToken,
@@ -442,18 +582,15 @@ export function createSupabaseWorkspaceAuthService({
         return;
       }
 
-      const state = await readState();
       const tokenHash = hashSessionToken(sessionToken);
-      const nextSessions = state.sessions.filter((entry) => entry.tokenHash !== tokenHash);
+      const { error } = await adminClient
+        .from(SESSIONS_TABLE)
+        .delete()
+        .eq("token_hash", tokenHash);
 
-      if (nextSessions.length === state.sessions.length) {
-        return;
+      if (error && !isMissingTableError(error)) {
+        throw new Error(`Supabase session delete failed: ${error.message}`);
       }
-
-      await writeState({
-        ...state,
-        sessions: nextSessions
-      });
     },
 
     async listWorkspaces(sessionToken) {
@@ -468,71 +605,102 @@ export function createSupabaseWorkspaceAuthService({
         throw new Error("Informe um nome de workspace com pelo menos 2 caracteres.");
       }
 
-      const state = await readState();
-      const tokenHash = hashSessionToken(sessionToken);
-      const session = state.sessions.find((entry) => entry.tokenHash === tokenHash);
+      const session = await findSessionByToken(sessionToken);
 
       if (!session) {
         throw new Error("Sessao invalida.");
       }
 
-      const user = state.users.find((entry) => entry.id === session.userId);
-
-      if (!user) {
-        throw new Error("Usuario nao encontrado.");
-      }
-
-      const createdAt = now();
       const workspace = {
         id: `ws_${randomUUID()}`,
         name: trimmedName,
-        slug: ensureWorkspaceSlug(trimmedName, state.workspaces),
-        ownerUserId: user.id,
-        createdAt
+        slug: await ensureUniqueWorkspaceSlug(trimmedName),
+        owner_user_id: session.user_id,
+        created_at: now()
       };
       const membership = {
         id: `mbr_${randomUUID()}`,
-        userId: user.id,
-        workspaceId: workspace.id,
+        user_id: session.user_id,
+        workspace_id: workspace.id,
         role: "owner",
-        createdAt
+        created_at: now()
       };
 
-      state.workspaces.push(workspace);
-      state.memberships.push(membership);
-      session.workspaceId = workspace.id;
-      session.lastSeenAt = createdAt;
-      await writeState(state);
+      const { error: workspaceError } = await adminClient
+        .from(WORKSPACES_TABLE)
+        .insert(workspace);
 
-      const payload = await buildSessionPayload(state, session);
+      if (workspaceError) {
+        throw new Error(`Supabase workspace create failed: ${workspaceError.message}`);
+      }
+
+      const { error: membershipError } = await adminClient
+        .from(MEMBERSHIPS_TABLE)
+        .insert(membership);
+
+      if (membershipError) {
+        throw new Error(`Supabase membership create failed: ${membershipError.message}`);
+      }
+
+      const { error: sessionError } = await adminClient
+        .from(SESSIONS_TABLE)
+        .update({
+          workspace_id: workspace.id,
+          last_seen_at: now()
+        })
+        .eq("id", session.id);
+
+      if (sessionError) {
+        throw new Error(`Supabase session update failed: ${sessionError.message}`);
+      }
+
+      const payload = await buildSessionPayloadFromRecord({
+        ...session,
+        workspace_id: workspace.id,
+        last_seen_at: now()
+      });
+
       return {
-        workspace: sanitizeWorkspace(workspace, membership.role),
+        workspace: sanitizeWorkspace({
+          id: workspace.id,
+          name: workspace.name,
+          slug: workspace.slug,
+          createdAt: workspace.created_at
+        }, "owner"),
         session: payload
       };
     },
 
     async selectWorkspace(sessionToken, workspaceId) {
-      const state = await readState();
-      const tokenHash = hashSessionToken(sessionToken);
-      const session = state.sessions.find((entry) => entry.tokenHash === tokenHash);
+      const session = await findSessionByToken(sessionToken);
 
       if (!session) {
         throw new Error("Sessao invalida.");
       }
 
-      const membership = state.memberships.find((entry) => (
-        entry.userId === session.userId && entry.workspaceId === workspaceId
-      ));
+      const memberships = await listMembershipsForUser(session.user_id);
 
-      if (!membership) {
-        throw new Error("Voce nao tem acesso a esse workspace.");
+      if (!memberships.some((workspace) => workspace.id === workspaceId)) {
+        throw new Error("Workspace nao encontrado para este usuario.");
       }
 
-      session.workspaceId = workspaceId;
-      session.lastSeenAt = now();
-      await writeState(state);
+      const { error } = await adminClient
+        .from(SESSIONS_TABLE)
+        .update({
+          workspace_id: workspaceId,
+          last_seen_at: now()
+        })
+        .eq("id", session.id);
 
-      return buildSessionPayload(state, session);
+      if (error) {
+        throw new Error(`Supabase session update failed: ${error.message}`);
+      }
+
+      return buildSessionPayloadFromRecord({
+        ...session,
+        workspace_id: workspaceId,
+        last_seen_at: now()
+      });
     }
   };
 }

@@ -11,6 +11,7 @@
     "research": "node src/main.js",
     "radar:web": "node src/web/server.js",
     "supabase:migrate-state": "node src/migrate-app-state-to-supabase.js",
+    "supabase:migrate-relational": "node src/migrate-supabase-app-state-to-relational.js",
     "agents:activate": "node src/activate-squads.js",
     "share:web": "lt --port 4173 --local-host 127.0.0.1",
     "share:lan": "node src/web/share-lan.js",
