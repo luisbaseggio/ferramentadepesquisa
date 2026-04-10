@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual, createHash } from "node:crypto";
 import { promisify } from "node:util";
+import { badRequest, unauthorized } from "./http-errors.js";
 
 const scrypt = promisify(scryptCallback);
 const SESSION_TTL_DAYS = 30;
@@ -247,25 +248,25 @@ export function createWorkspaceAuthService({
       const trimmedWorkspace = String(workspaceName ?? "").trim();
 
       if (trimmedName.length < 2) {
-        throw new Error("Informe um nome com pelo menos 2 caracteres.");
+        throw badRequest("Informe um nome com pelo menos 2 caracteres.");
       }
 
       if (!normalizedEmail.includes("@")) {
-        throw new Error("Informe um email valido.");
+        throw badRequest("Informe um email valido.");
       }
 
       if (String(password ?? "").length < 8) {
-        throw new Error("A senha precisa ter pelo menos 8 caracteres.");
+        throw badRequest("A senha precisa ter pelo menos 8 caracteres.");
       }
 
       if (trimmedWorkspace.length < 2) {
-        throw new Error("Informe um nome de workspace com pelo menos 2 caracteres.");
+        throw badRequest("Informe um nome de workspace com pelo menos 2 caracteres.");
       }
 
       const state = await readState();
 
       if (state.users.some((user) => user.email === normalizedEmail)) {
-        throw new Error("Ja existe uma conta com este email.");
+        throw badRequest("Ja existe uma conta com este email.");
       }
 
       const createdAt = now();
@@ -317,13 +318,13 @@ export function createWorkspaceAuthService({
       const user = state.users.find((entry) => entry.email === normalizedEmail);
 
       if (!user) {
-        throw new Error("Email ou senha invalidos.");
+        throw unauthorized("Email ou senha invalidos.");
       }
 
       const passwordMatches = await verifyPassword(password, user.passwordSalt, user.passwordHash);
 
       if (!passwordMatches) {
-        throw new Error("Email ou senha invalidos.");
+        throw unauthorized("Email ou senha invalidos.");
       }
 
       user.lastLoginAt = now();
@@ -331,7 +332,7 @@ export function createWorkspaceAuthService({
       const activeWorkspace = memberships[0] || null;
 
       if (!activeWorkspace) {
-        throw new Error("Sua conta ainda nao possui workspace.");
+        throw unauthorized("Sua conta ainda nao possui workspace.");
       }
 
       const { sessionToken } = await createSession(state, user.id, activeWorkspace.id);
@@ -375,7 +376,7 @@ export function createWorkspaceAuthService({
       const trimmedName = String(name ?? "").trim();
 
       if (trimmedName.length < 2) {
-        throw new Error("Informe um nome de workspace com pelo menos 2 caracteres.");
+        throw badRequest("Informe um nome de workspace com pelo menos 2 caracteres.");
       }
 
       const state = await readState();
@@ -383,13 +384,13 @@ export function createWorkspaceAuthService({
       const session = state.sessions.find((entry) => entry.tokenHash === tokenHash);
 
       if (!session) {
-        throw new Error("Sessao invalida.");
+        throw unauthorized("Sessao invalida.");
       }
 
       const user = state.users.find((entry) => entry.id === session.userId);
 
       if (!user) {
-        throw new Error("Usuario nao encontrado.");
+        throw unauthorized("Usuario nao encontrado.");
       }
 
       const createdAt = now();
@@ -427,7 +428,7 @@ export function createWorkspaceAuthService({
       const session = state.sessions.find((entry) => entry.tokenHash === tokenHash);
 
       if (!session) {
-        throw new Error("Sessao invalida.");
+        throw unauthorized("Sessao invalida.");
       }
 
       const membership = state.memberships.find((entry) => (
@@ -435,7 +436,7 @@ export function createWorkspaceAuthService({
       ));
 
       if (!membership) {
-        throw new Error("Voce nao tem acesso a esse workspace.");
+        throw badRequest("Voce nao tem acesso a esse workspace.");
       }
 
       session.workspaceId = workspaceId;

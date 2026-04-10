@@ -357,8 +357,16 @@ function render() {
 }
 
 async function requestJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    ...options
+  });
   const payload = await response.json();
+
+  if (response.status === 401) {
+    window.location.href = "/?auth=required";
+    throw new Error("Faça login para continuar.");
+  }
 
   if (!response.ok) {
     throw new Error(payload.error || payload.message || "Falha na requisicao.");

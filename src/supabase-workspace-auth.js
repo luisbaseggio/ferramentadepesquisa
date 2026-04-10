@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID, createHash, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
+import { badRequest, unauthorized } from "./http-errors.js";
 import { createSupabasePublicClient, createSupabaseServiceClient, isMissingTableError } from "./supabase-relational.js";
 
 const scrypt = promisify(scryptCallback);
@@ -492,19 +493,19 @@ export function createSupabaseWorkspaceAuthService({
       const trimmedWorkspace = String(workspaceName ?? "").trim();
 
       if (trimmedName.length < 2) {
-        throw new Error("Informe um nome com pelo menos 2 caracteres.");
+        throw badRequest("Informe um nome com pelo menos 2 caracteres.");
       }
 
       if (!normalizedEmail.includes("@")) {
-        throw new Error("Informe um email valido.");
+        throw badRequest("Informe um email valido.");
       }
 
       if (String(password ?? "").length < 8) {
-        throw new Error("A senha precisa ter pelo menos 8 caracteres.");
+        throw badRequest("A senha precisa ter pelo menos 8 caracteres.");
       }
 
       if (trimmedWorkspace.length < 2) {
-        throw new Error("Informe um nome de workspace com pelo menos 2 caracteres.");
+        throw badRequest("Informe um nome de workspace com pelo menos 2 caracteres.");
       }
 
       const { data, error } = await adminClient.auth.admin.createUser({
@@ -517,7 +518,7 @@ export function createSupabaseWorkspaceAuthService({
       });
 
       if (error) {
-        throw new Error(error.message || "Nao foi possivel criar a conta no Supabase Auth.");
+        throw badRequest(error.message || "Nao foi possivel criar a conta no Supabase Auth.");
       }
 
       const user = await ensureProfile(data.user, trimmedName);
@@ -553,7 +554,7 @@ export function createSupabaseWorkspaceAuthService({
       }
 
       if (signIn.error || !signIn.data?.user) {
-        throw new Error("Email ou senha invalidos.");
+        throw unauthorized("Email ou senha invalidos.");
       }
 
       const user = await ensureProfile(signIn.data.user, signIn.data.user.user_metadata?.name || "");
@@ -562,7 +563,7 @@ export function createSupabaseWorkspaceAuthService({
       const activeWorkspace = memberships.find((entry) => entry.id === workspace.id) || memberships[0] || null;
 
       if (!activeWorkspace) {
-        throw new Error("Sua conta ainda nao possui workspace.");
+        throw unauthorized("Sua conta ainda nao possui workspace.");
       }
 
       const { sessionToken } = await createSessionRecord(user.id, activeWorkspace.id);
@@ -602,13 +603,13 @@ export function createSupabaseWorkspaceAuthService({
       const trimmedName = String(name ?? "").trim();
 
       if (trimmedName.length < 2) {
-        throw new Error("Informe um nome de workspace com pelo menos 2 caracteres.");
+        throw badRequest("Informe um nome de workspace com pelo menos 2 caracteres.");
       }
 
       const session = await findSessionByToken(sessionToken);
 
       if (!session) {
-        throw new Error("Sessao invalida.");
+        throw unauthorized("Sessao invalida.");
       }
 
       const workspace = {
@@ -675,13 +676,13 @@ export function createSupabaseWorkspaceAuthService({
       const session = await findSessionByToken(sessionToken);
 
       if (!session) {
-        throw new Error("Sessao invalida.");
+        throw unauthorized("Sessao invalida.");
       }
 
       const memberships = await listMembershipsForUser(session.user_id);
 
       if (!memberships.some((workspace) => workspace.id === workspaceId)) {
-        throw new Error("Workspace nao encontrado para este usuario.");
+        throw badRequest("Workspace nao encontrado para este usuario.");
       }
 
       const { error } = await adminClient

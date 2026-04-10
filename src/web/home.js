@@ -314,8 +314,15 @@ function render() {
 }
 
 async function requestJson(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    credentials: "same-origin"
+  });
   const payload = await response.json();
+
+  if (response.status === 401 && url !== "/api/auth/session") {
+    window.location.href = "/?auth=required";
+    throw new Error("Faça login para continuar.");
+  }
 
   if (!response.ok) {
     throw new Error(payload.error || "Falha na requisição.");
@@ -325,8 +332,16 @@ async function requestJson(url) {
 }
 
 async function requestJsonWithOptions(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    ...options
+  });
   const payload = await response.json();
+
+  if (response.status === 401 && !url.startsWith("/api/auth/")) {
+    window.location.href = "/?auth=required";
+    throw new Error("Faça login para continuar.");
+  }
 
   if (!response.ok) {
     throw new Error(payload.error || "Falha na requisição.");

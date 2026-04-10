@@ -78,8 +78,15 @@ function badgeClass(heat) {
 }
 
 async function requestJson(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    credentials: "same-origin"
+  });
   const payload = await response.json();
+
+  if (response.status === 401) {
+    window.location.href = "/?auth=required";
+    throw new Error("Faça login para continuar.");
+  }
 
   if (!response.ok) {
     throw new Error(payload.error || "Falha na requisicao.");
@@ -89,8 +96,16 @@ async function requestJson(url) {
 }
 
 async function requestJsonWithOptions(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    ...options
+  });
   const payload = await response.json();
+
+  if (response.status === 401) {
+    window.location.href = "/?auth=required";
+    throw new Error("Faça login para continuar.");
+  }
 
   if (!response.ok) {
     throw new Error(payload.error || "Falha na requisicao.");

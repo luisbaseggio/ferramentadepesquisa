@@ -444,12 +444,24 @@ function getSessionTokenFromRequest(request) {
   return parseCookies(request)[SESSION_COOKIE_NAME] || "";
 }
 
+function isSecureRequest(request) {
+  return (
+    request.headers["x-forwarded-proto"] === "https" ||
+    request.headers["x-forwarded-protocol"] === "https" ||
+    Boolean(request.socket?.encrypted)
+  );
+}
+
 function serializeSessionCookie(value, options = {}) {
   const parts = [`${SESSION_COOKIE_NAME}=${encodeURIComponent(value)}`];
 
   parts.push(`Path=${options.path || "/"}`);
   parts.push("HttpOnly");
   parts.push("SameSite=Lax");
+
+  if (options.secure) {
+    parts.push("Secure");
+  }
 
   if (options.maxAge !== undefined) {
     parts.push(`Max-Age=${options.maxAge}`);
@@ -458,15 +470,17 @@ function serializeSessionCookie(value, options = {}) {
   return parts.join("; ");
 }
 
-function setSessionCookie(response, sessionToken) {
+function setSessionCookie(request, response, sessionToken) {
   response.setHeader("Set-Cookie", serializeSessionCookie(sessionToken, {
-    maxAge: 30 * 24 * 60 * 60
+    maxAge: 30 * 24 * 60 * 60,
+    secure: isSecureRequest(request)
   }));
 }
 
-function clearSessionCookie(response) {
+function clearSessionCookie(request, response) {
   response.setHeader("Set-Cookie", serializeSessionCookie("", {
-    maxAge: 0
+    maxAge: 0,
+    secure: isSecureRequest(request)
   }));
 }
 
@@ -578,7 +592,7 @@ export async function handleRequest(request, response) {
     if (request.method === "POST" && url.pathname === "/api/auth/signup") {
       const body = await parseJsonBody(request);
       const result = await authService.signup(body);
-      setSessionCookie(response, result.sessionToken);
+      setSessionCookie(request, response, result.sessionToken);
       sendJson(response, 200, {
         ok: true,
         message: "Conta criada com sucesso.",
@@ -591,7 +605,7 @@ export async function handleRequest(request, response) {
     if (request.method === "POST" && url.pathname === "/api/auth/login") {
       const body = await parseJsonBody(request);
       const result = await authService.login(body);
-      setSessionCookie(response, result.sessionToken);
+      setSessionCookie(request, response, result.sessionToken);
       sendJson(response, 200, {
         ok: true,
         message: "Login realizado com sucesso.",
@@ -603,7 +617,7 @@ export async function handleRequest(request, response) {
 
     if (request.method === "POST" && url.pathname === "/api/auth/logout") {
       await authService.logout(sessionToken);
-      clearSessionCookie(response);
+      clearSessionCookie(request, response);
       sendJson(response, 200, {
         ok: true,
         authenticated: false
@@ -998,7 +1012,7 @@ export async function handleRequest(request, response) {
     response.end(body);
   } catch (error) {
     syncStatus.lastError = error.message || "Erro interno no servidor";
-    sendJson(response, 500, {
+    sendJson(response, error.statusCode || 500, {
       error: error.message || "Erro interno no servidor"
     });
   }
