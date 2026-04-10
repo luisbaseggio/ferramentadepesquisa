@@ -15,6 +15,7 @@ import { createReviewQueueRepository } from "../review-queue.js";
 import { APPROVED_FILES_DIR, IS_SERVERLESS_RUNTIME, resolveDataPath, resolveOutputPath } from "../runtime-paths.js";
 import { SUPABASE_CONFIG, isSupabaseConfigured } from "../supabase-config.js";
 import { createSupabaseStateStore } from "../supabase-state-store.js";
+import { createSupabaseWorkspaceAuthService } from "../supabase-workspace-auth.js";
 import { createWorkspaceAuthService } from "../workspace-auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -56,10 +57,17 @@ const approvedChannel = createApprovedChannelRepository({
   store: useSupabaseState ? supabaseStateStore : null
 });
 const googleSheetsSync = createGoogleSheetsReviewSync(GOOGLE_SHEETS_CONFIG);
-const authService = createWorkspaceAuthService({
-  stateFile: resolveDataPath("auth-state.json"),
-  store: useSupabaseState ? supabaseStateStore : null
-});
+const authService = (useSupabaseState && SUPABASE_CONFIG.anonKey)
+  ? createSupabaseWorkspaceAuthService({
+      url: SUPABASE_CONFIG.url,
+      anonKey: SUPABASE_CONFIG.anonKey,
+      serviceRoleKey: SUPABASE_CONFIG.serviceRoleKey,
+      store: supabaseStateStore
+    })
+  : createWorkspaceAuthService({
+      stateFile: resolveDataPath("auth-state.json"),
+      store: useSupabaseState ? supabaseStateStore : null
+    });
 const approvedPromptRewriter = createApprovedPromptRewriter();
 const openAIContentGenerator = createOpenAIContentGenerator();
 const syncStatus = {
@@ -133,7 +141,8 @@ async function buildStudioOverview() {
     approvedChannel: approved,
     sheetsStatus: syncStatus,
     storage: {
-      mode: useSupabaseState ? "supabase" : "local"
+      mode: useSupabaseState ? "supabase" : "local",
+      authMode: (useSupabaseState && SUPABASE_CONFIG.anonKey) ? "supabase-auth" : "local-auth"
     }
   };
 }
@@ -612,7 +621,8 @@ export async function handleRequest(request, response) {
     if (request.method === "GET" && url.pathname === "/api/google-sheets/status") {
       sendJson(response, 200, {
         ...syncStatus,
-        storageMode: useSupabaseState ? "supabase" : "local"
+        storageMode: useSupabaseState ? "supabase" : "local",
+        authMode: (useSupabaseState && SUPABASE_CONFIG.anonKey) ? "supabase-auth" : "local-auth"
       });
       return;
     }
