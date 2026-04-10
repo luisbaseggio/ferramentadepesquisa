@@ -101,9 +101,24 @@ function sanitizeWorkspace(workspace, role = "member") {
 
 export function createWorkspaceAuthService({
   stateFile = path.resolve("data", "auth-state.json"),
-  now = () => new Date().toISOString()
+  now = () => new Date().toISOString(),
+  store = null,
+  stateKey = "auth_state"
 } = {}) {
   async function readState() {
+    if (store) {
+      try {
+        const state = await store.read(stateKey, buildInitialState());
+        return {
+          updatedAt: state.updatedAt ?? null,
+          users: Array.isArray(state.users) ? state.users : [],
+          workspaces: Array.isArray(state.workspaces) ? state.workspaces : [],
+          memberships: Array.isArray(state.memberships) ? state.memberships : [],
+          sessions: Array.isArray(state.sessions) ? state.sessions : []
+        };
+      } catch {}
+    }
+
     const state = await safeReadJson(stateFile);
     return {
       updatedAt: state.updatedAt ?? null,
@@ -115,6 +130,15 @@ export function createWorkspaceAuthService({
   }
 
   async function writeState(state) {
+    if (store) {
+      try {
+        return await store.write(stateKey, {
+          ...state,
+          updatedAt: now()
+        });
+      } catch {}
+    }
+
     await mkdir(path.dirname(stateFile), { recursive: true });
     await writeFile(stateFile, JSON.stringify({
       ...state,

@@ -25,9 +25,21 @@ async function safeReadJson(filePath) {
 export function createApprovedChannelRepository({
   outputFile = path.resolve("output", "approved-channel.json"),
   markdownDir = path.resolve("output", "approved-posts"),
-  now = () => new Date().toISOString()
+  now = () => new Date().toISOString(),
+  store = null,
+  stateKey = "approved_channel"
 } = {}) {
   async function readState() {
+    if (store) {
+      try {
+        const state = await store.read(stateKey, initialState());
+        return {
+          updatedAt: state.updatedAt ?? null,
+          items: Array.isArray(state.items) ? state.items : []
+        };
+      } catch {}
+    }
+
     const state = await safeReadJson(outputFile);
     return {
       updatedAt: state.updatedAt ?? null,
@@ -36,6 +48,12 @@ export function createApprovedChannelRepository({
   }
 
   async function writeState(state) {
+    if (store) {
+      try {
+        return await store.write(stateKey, state);
+      } catch {}
+    }
+
     await mkdir(path.dirname(outputFile), { recursive: true });
     await writeFile(outputFile, JSON.stringify(state, null, 2));
     return state;

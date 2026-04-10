@@ -23,9 +23,21 @@ async function safeReadJson(filePath) {
 
 export function createReviewQueueRepository({
   outputFile = path.resolve("output", "review-queue.json"),
-  now = () => new Date().toISOString()
+  now = () => new Date().toISOString(),
+  store = null,
+  stateKey = "review_queue"
 } = {}) {
   async function readQueue() {
+    if (store) {
+      try {
+        const queue = await store.read(stateKey, buildInitialQueue());
+        return {
+          updatedAt: queue.updatedAt ?? null,
+          items: Array.isArray(queue.items) ? queue.items : []
+        };
+      } catch {}
+    }
+
     const queue = await safeReadJson(outputFile);
     return {
       updatedAt: queue.updatedAt ?? null,
@@ -34,6 +46,12 @@ export function createReviewQueueRepository({
   }
 
   async function writeQueue(queue) {
+    if (store) {
+      try {
+        return await store.write(stateKey, queue);
+      } catch {}
+    }
+
     await mkdir(path.dirname(outputFile), { recursive: true });
     await writeFile(outputFile, JSON.stringify(queue, null, 2));
     return queue;

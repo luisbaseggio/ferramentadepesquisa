@@ -13,6 +13,8 @@ import { createApprovedPromptRewriter } from "../openai-approved-rewriter.js";
 import { createRealtimeRadarService } from "../realtime-radar.js";
 import { createReviewQueueRepository } from "../review-queue.js";
 import { APPROVED_FILES_DIR, IS_SERVERLESS_RUNTIME, resolveDataPath, resolveOutputPath } from "../runtime-paths.js";
+import { SUPABASE_CONFIG, isSupabaseConfigured } from "../supabase-config.js";
+import { createSupabaseStateStore } from "../supabase-state-store.js";
 import { createWorkspaceAuthService } from "../workspace-auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,17 +42,23 @@ const MIME_TYPES = {
   ".js": "text/javascript; charset=utf-8"
 };
 
+const supabaseStateStore = createSupabaseStateStore();
+const useSupabaseState = isSupabaseConfigured(SUPABASE_CONFIG);
+
 const radarService = createRealtimeRadarService();
 const reviewQueue = createReviewQueueRepository({
-  outputFile: resolveOutputPath("review-queue.json")
+  outputFile: resolveOutputPath("review-queue.json"),
+  store: useSupabaseState ? supabaseStateStore : null
 });
 const approvedChannel = createApprovedChannelRepository({
   outputFile: resolveOutputPath("approved-channel.json"),
-  markdownDir: resolveOutputPath("approved-posts")
+  markdownDir: resolveOutputPath("approved-posts"),
+  store: useSupabaseState ? supabaseStateStore : null
 });
 const googleSheetsSync = createGoogleSheetsReviewSync(GOOGLE_SHEETS_CONFIG);
 const authService = createWorkspaceAuthService({
-  stateFile: resolveDataPath("auth-state.json")
+  stateFile: resolveDataPath("auth-state.json"),
+  store: useSupabaseState ? supabaseStateStore : null
 });
 const approvedPromptRewriter = createApprovedPromptRewriter();
 const openAIContentGenerator = createOpenAIContentGenerator();
@@ -123,7 +131,10 @@ async function buildStudioOverview() {
   return {
     reviewQueue: queue,
     approvedChannel: approved,
-    sheetsStatus: syncStatus
+    sheetsStatus: syncStatus,
+    storage: {
+      mode: useSupabaseState ? "supabase" : "local"
+    }
   };
 }
 
@@ -599,7 +610,10 @@ export async function handleRequest(request, response) {
     }
 
     if (request.method === "GET" && url.pathname === "/api/google-sheets/status") {
-      sendJson(response, 200, syncStatus);
+      sendJson(response, 200, {
+        ...syncStatus,
+        storageMode: useSupabaseState ? "supabase" : "local"
+      });
       return;
     }
 
@@ -756,7 +770,25 @@ export async function handleRequest(request, response) {
     if (request.method === "GET" && url.pathname.startsWith("/approved-files/")) {
       const fileName = path.basename(url.pathname);
       const filePath = path.join(APPROVED_FILES_DIR, fileName);
-      const body = await readFile(filePath);
+      let body;
+
+      try {
+        body = await readFile(filePath);
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+
+        const approved = await approvedChannel.list();
+        const item = approved.items.find((entry) => entry.outputFileName === fileName);
+
+        if (!item) {
+          throw error;
+        }
+
+        body = Buffer.from(item.markdown || "", "utf8");
+      }
+
       response.writeHead(200, {
         "content-type": "text/markdown; charset=utf-8"
       });
